@@ -1,0 +1,162 @@
+name: Build SukiSU Kernel for Raphael
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: 'Kernel branch to build'
+        required: true
+        default: 'bka'
+      sukisu_branch:
+        description: 'SukiSU branch/tag'
+        required: true
+        default: 'main'
+      create_release:
+        description: 'Create GitHub release'
+        required: true
+        default: 'false'
+
+env:
+  KERNEL_BRANCH: ${{ github.event.inputs.kernel_branch }}
+  SUKISU_BRANCH: ${{ github.event.inputs.sukisu_branch }}
+  DEFCONFIG: vendor/sm8150-perf_defconfig
+  DEVICE: raphael
+  ARCH: arm64
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.KERNEL_BRANCH }}
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git ccache automake flex lzop bison gperf build-essential \
+            zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 \
+            libbz2-dev libbz2-1.0 squashfs-tools pngcrush schedtool \
+            dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen \
+            libswitch-perl policycoreutils minicom libxml-sax-base-perl \
+            libxml-simple-perl bc libc6-dev-i386 lib32ncurses5-dev \
+            libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip \
+            device-tree-compiler python2 python3 libncurses5
+
+      - name: Setup Python 2 for old build scripts
+        run: |
+          sudo ln -sf /usr/bin/python2 /usr/bin/python || true
+
+      - name: Download Clang toolchain
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/toolchain
+          cd $GITHUB_WORKSPACE/toolchain
+          # Proton Clang 13.0.0 - widely used for 4.14 kernels
+          wget -q https://github.com/kdrag0n/proton-clang/archive/refs/tags/20211001.tar.gz
+          tar -xzf 20211001.tar.gz
+          mv proton-clang-20211001 proton-clang
+          echo "TOOLCHAIN=$GITHUB_WORKSPACE/toolchain/proton-clang/bin" >> $GITHUB_ENV
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: 5G
+
+      - name: Setup SukiSU
+        run: |
+          cd $GITHUB_WORKSPACE
+          # Run SukiSU setup script
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s ${{ env.SUKISU_BRANCH }}
+          # Verify SukiSU was cloned
+          ls -la KernelSU/kernel/
+
+      - name: Modify defconfig for SukiSU
+        run: |
+          cd $GITHUB_WORKSPACE
+          # Add KSU config
+          echo "CONFIG_KSU=y" >> arch/${{ env.ARCH }}/configs/${{ env.DEFCONFIG }}
+          # Also add KALLSYMS if not present (needed for non-GKI)
+          if ! grep -q "CONFIG_KALLSYMS=y" arch/${{ env.ARCH }}/configs/${{ env.DEFCONFIG }}; then
+            echo "CONFIG_KALLSYMS=y" >> arch/${{ env.ARCH }}/configs/${{ env.DEFCONFIG }}
+          fi
+          # Verify config changes
+          echo "=== KSU related configs ==="
+          grep -E "KSU|KALLSYMS" arch/${{ env.ARCH }}/configs/${{ env.DEFCONFIG }} || true
+
+      - name: Build kernel
+        run: |
+          cd $GITHUB_WORKSPACE
+          export PATH="${{ env.TOOLCHAIN }}:$PATH"
+          export ARCH=${{ env.ARCH }}
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=clang
+          export CXX=clang++
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export STRIP=llvm-strip
+          export LD=ld.lld
+          # ccache
+          export CCACHE_COMPRESS=1
+          export CCACHE_DIR=$HOME/.ccache
+          export USE_CCACHE=1
+          export CC="ccache clang"
+          # Build defconfig
+          make O=out ${{ env.DEFCONFIG }}
+          # Build kernel - Image.gz-dtb for raphael
+          make O=out -j$(nproc --all) Image.gz-dtb
+
+      - name: Check build output
+        run: |
+          cd $GITHUB_WORKSPACE
+          ls -la out/arch/${{ env.ARCH }}/boot/
+          file out/arch/${{ env.ARCH }}/boot/Image.gz-dtb || true
+
+      - name: Package with AnyKernel3
+        run: |
+          cd $GITHUB_WORKSPACE
+          # Clone AnyKernel3
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+          # Copy kernel image
+          cp out/arch/${{ env.ARCH }}/boot/Image.gz-dtb anykernel/
+          # Update AnyKernel3 config for raphael
+          cd anykernel
+          # Modify anykernel.sh for raphael
+          sed -i 's/do.devicecheck=.*/do.devicecheck=1/' anykernel.sh
+          sed -i 's/device.name1=.*/device.name1=raphael/' anykernel.sh
+          sed -i 's/device.name2=.*/device.name2=raphaelin/' anykernel.sh
+          sed -i 's/block=.*/block=\/dev\/block\/bootdevice\/by-name\/boot;/' anykernel.sh
+          # Remove placeholder files
+          rm -f zImage Image.gz-dtb *.md LICENSE
+          # Create flashable zip
+          zip -r9 ../SukiSU-Raphael-${{ env.KERNEL_BRANCH }}-$(date +%Y%m%d).zip * -x *.git* -x README* -x LICENSE*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SukiSU-Raphael-${{ env.KERNEL_BRANCH }}-${{ github.run_number }}
+          path: |
+            ${{ github.workspace }}/SukiSU-Raphael-*.zip
+            ${{ github.workspace }}/out/arch/${{ env.ARCH }}/boot/Image.gz-dtb
+
+      - name: Release
+        if: github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ github.workspace }}/SukiSU-Raphael-*.zip
+          tag_name: raphael-sukisu-${{ github.run_number }}
+          name: SukiSU Kernel for Raphael #${{ github.run_number }}
+          body: |
+            SukiSU Kernel for Xiaomi Mi 9T Pro / Redmi K20 Pro (raphael)
+
+            - Kernel branch: ${{ env.KERNEL_BRANCH }}
+            - SukiSU branch: ${{ env.SUKISU_BRANCH }}
+            - Defconfig: ${{ env.DEFCONFIG }}
+
+            Flash via recovery (TWRP/OrangeFox).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
