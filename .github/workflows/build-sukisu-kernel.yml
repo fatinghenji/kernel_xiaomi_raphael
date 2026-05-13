@@ -44,7 +44,8 @@ jobs:
             libswitch-perl policycoreutils minicom libxml-sax-base-perl \
             libxml-simple-perl bc libc6-dev-i386 lib32ncurses5-dev \
             libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip \
-            device-tree-compiler python2 python3 libncurses5
+            device-tree-compiler python2 python3 libncurses5 \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
       - name: Setup Python 2 for old build scripts
         run: |
