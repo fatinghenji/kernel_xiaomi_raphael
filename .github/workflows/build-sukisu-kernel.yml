@@ -54,10 +54,10 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/toolchain
           cd $GITHUB_WORKSPACE/toolchain
-          # Proton Clang 13.0.0 - widely used for 4.14 kernels
-          wget -q https://github.com/kdrag0n/proton-clang/archive/refs/tags/20211001.tar.gz
-          tar -xzf 20211001.tar.gz
-          mv proton-clang-20211001 proton-clang
+          # Neutron Clang - prebuilt toolchain for kernel development
+          wget -q "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
+          tar -I zstd -xf neutron-clang-10032024.tar.zst
+          mv neutron-clang-* proton-clang || true
           echo "TOOLCHAIN=$GITHUB_WORKSPACE/toolchain/proton-clang/bin" >> $GITHUB_ENV
 
       - name: Setup ccache
