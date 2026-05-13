@@ -105,7 +105,7 @@ int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
 	return 0;
 }
 
-int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
+static __always_inline int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
 {
 	// const char sh[] = SH_PATH;
 	const char su[] = SU_PATH;
