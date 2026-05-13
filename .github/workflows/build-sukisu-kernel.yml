@@ -107,6 +107,8 @@ jobs:
           make O=out ${{ env.DEFCONFIG }}
           # Build kernel - Image.gz-dtb for raphael
           make O=out -j$(nproc --all) Image.gz-dtb
+        env:
+          CLANG_TRIPLE: aarch64-linux-gnu-
 
       - name: Check build output
         run: |
